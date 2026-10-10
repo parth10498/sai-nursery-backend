@@ -2,6 +2,7 @@ from typing import List, Optional, Tuple
 from uuid import UUID
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
+from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.payment import Payment
 from app.models.user import User, UserTypeEnum
@@ -18,7 +19,12 @@ class PaymentService:
         page: int = 1,
         size: int = 20,
     ) -> Tuple[List[PaymentResponse], int]:
-        stmt = select(Payment).where(Payment.deleted_at.is_(None)).order_by(Payment.payment_date.desc(), Payment.created_at.desc())
+        stmt = (
+            select(Payment)
+            .options(selectinload(Payment.customer))
+            .where(Payment.deleted_at.is_(None))
+            .order_by(Payment.payment_date.desc(), Payment.created_at.desc())
+        )
         if customer_id:
             stmt = stmt.where(Payment.user_id == customer_id)
 
@@ -49,8 +55,13 @@ class PaymentService:
         return responses, total
 
     async def get_payment(self, payment_id: UUID) -> PaymentResponse:
-        payment = await self._db.get(Payment, payment_id)
-        if not payment or payment.deleted_at is not None:
+        stmt = (
+            select(Payment)
+            .options(selectinload(Payment.customer))
+            .where(Payment.id == payment_id, Payment.deleted_at.is_(None))
+        )
+        payment = (await self._db.execute(stmt)).scalar_one_or_none()
+        if not payment:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Payment record not found")
 
         return PaymentResponse(

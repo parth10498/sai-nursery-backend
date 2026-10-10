@@ -1,8 +1,9 @@
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
-from typing import Optional
+from typing import List, Optional
 from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from app.schemas.sale import SaleResponse
 
 
 def _clean_str(v: Optional[str]) -> Optional[str]:
@@ -102,3 +103,24 @@ class SugarCaneResponse(SugarCaneBase):
 
     id: UUID
     created_at: datetime
+    updated_at: Optional[datetime] = None
+
+
+class SugarCaneDetailResponse(SugarCaneBase):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    # Purchase & Sales Analytics
+    total_orders: int = 0
+    total_revenue: Decimal = Decimal("0.00")
+    total_plants_qty: Decimal = Decimal("0.00")
+    total_tons_weight: Decimal = Decimal("0.00")
+    unique_customers_count: int = 0
+    first_sale_date: Optional[date] = None
+    last_sale_date: Optional[date] = None
+
+    # Purchase History
+    recent_purchases: List[SaleResponse] = Field(default_factory=list)

@@ -14,12 +14,13 @@ router = APIRouter(prefix="/sales", tags=["Sales"])
 async def list_sales(
     db: DBSession,
     user: CurrentUser,
-    customer_id: Optional[UUID] = None,
+    customer_id: Optional[UUID] = Query(None, description="Filter by Customer ID"),
+    sugar_cane_id: Optional[UUID] = Query(None, description="Filter by Sugarcane Variety ID"),
     page: int = Query(1, ge=1, description="Page number"),
     size: int = Query(20, ge=1, le=100, description="Items per page"),
 ):
     service = SaleService(db)
-    sales, total = await service.list_sales(customer_id=customer_id, page=page, size=size)
+    sales, total = await service.list_sales(customer_id=customer_id, sugar_cane_id=sugar_cane_id, page=page, size=size)
     total_pages = math.ceil(total / size) if size > 0 else 0
     return ApiResponse(
         data=PaginatedResponse(

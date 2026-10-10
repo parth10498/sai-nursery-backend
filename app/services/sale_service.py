@@ -3,6 +3,7 @@ from typing import List, Optional, Tuple
 from uuid import UUID
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
+from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.sale import Sale
 from app.models.sugar_cane import SugarCane
@@ -17,12 +18,20 @@ class SaleService:
     async def list_sales(
         self,
         customer_id: Optional[UUID] = None,
+        sugar_cane_id: Optional[UUID] = None,
         page: int = 1,
         size: int = 20,
     ) -> Tuple[List[SaleResponse], int]:
-        stmt = select(Sale).where(Sale.deleted_at.is_(None)).order_by(Sale.sale_date.desc(), Sale.created_at.desc())
+        stmt = (
+            select(Sale)
+            .options(selectinload(Sale.customer), selectinload(Sale.sugarcane))
+            .where(Sale.deleted_at.is_(None))
+            .order_by(Sale.sale_date.desc(), Sale.created_at.desc())
+        )
         if customer_id:
             stmt = stmt.where(Sale.user_id == customer_id)
+        if sugar_cane_id:
+            stmt = stmt.where(Sale.sugar_cane_id == sugar_cane_id)
 
         count_stmt = select(func.count()).select_from(stmt.subquery())
         total = (await self._db.scalar(count_stmt)) or 0
@@ -53,8 +62,13 @@ class SaleService:
         return responses, total
 
     async def get_sale(self, sale_id: UUID) -> SaleResponse:
-        sale = await self._db.get(Sale, sale_id)
-        if not sale or sale.deleted_at is not None:
+        stmt = (
+            select(Sale)
+            .options(selectinload(Sale.customer), selectinload(Sale.sugarcane))
+            .where(Sale.id == sale_id, Sale.deleted_at.is_(None))
+        )
+        sale = (await self._db.execute(stmt)).scalar_one_or_none()
+        if not sale:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Sale not found")
 
         return SaleResponse(

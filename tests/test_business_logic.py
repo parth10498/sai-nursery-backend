@@ -170,6 +170,29 @@ def test_sugarcane_negative_rate_invalid():
         )
 
 
+def test_sugarcane_detail_response_schema():
+    from datetime import datetime
+    import uuid
+    from app.schemas.sugar_cane import SugarCaneDetailResponse
+
+    detail = SugarCaneDetailResponse(
+        id=uuid.uuid4(),
+        name="Co 86032 (Nira)",
+        code="CO-86032",
+        default_rate=Decimal("2.50"),
+        is_active=True,
+        created_at=datetime.now(),
+        total_orders=15,
+        total_revenue=Decimal("125000.00"),
+        total_plants_qty=Decimal("50000"),
+        total_tons_weight=Decimal("0.00"),
+        unique_customers_count=8,
+    )
+    assert detail.total_orders == 15
+    assert detail.total_revenue == Decimal("125000.00")
+    assert detail.unique_customers_count == 8
+
+
 # ------------------ Auth Validations ------------------
 
 def test_login_request_validation():

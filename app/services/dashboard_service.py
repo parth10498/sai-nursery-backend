@@ -2,6 +2,7 @@ from collections import defaultdict
 from decimal import Decimal
 from typing import Dict, List
 from sqlalchemy import func, select
+from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.payment import Payment
 from app.models.sale import Sale
@@ -78,6 +79,7 @@ class DashboardService:
         # Query all active sales to generate monthly trends and variety breakdown
         sales_stmt = (
             select(Sale)
+            .options(selectinload(Sale.sugarcane))
             .where(Sale.deleted_at.is_(None))
             .order_by(Sale.sale_date.asc())
         )
@@ -153,6 +155,7 @@ class DashboardService:
 
         recent_sales_stmt = (
             select(Sale)
+            .options(selectinload(Sale.customer), selectinload(Sale.sugarcane))
             .where(Sale.deleted_at.is_(None))
             .order_by(Sale.sale_date.desc(), Sale.created_at.desc())
             .limit(5)

@@ -1,6 +1,8 @@
 from typing import Optional
 from uuid import UUID
 from fastapi import APIRouter, HTTPException, Response, status
+from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 from app.api.deps import AdminUser, DBSession
 from app.models.payment import Payment
 from app.models.sale import Sale
@@ -26,7 +28,12 @@ async def export_customers_pdf(db: DBSession, user: AdminUser, search: Optional[
 
 @router.get("/sales/{sale_id}/pdf")
 async def export_sale_invoice_pdf(sale_id: UUID, db: DBSession, user: AdminUser):
-    sale = await db.get(Sale, sale_id)
+    stmt = (
+        select(Sale)
+        .options(selectinload(Sale.customer), selectinload(Sale.sugarcane))
+        .where(Sale.id == sale_id)
+    )
+    sale = (await db.execute(stmt)).scalar_one_or_none()
     if not sale or sale.deleted_at is not None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Sale invoice record not found")
 
@@ -50,7 +57,12 @@ async def export_sale_invoice_pdf(sale_id: UUID, db: DBSession, user: AdminUser)
 
 @router.get("/payments/{payment_id}/pdf")
 async def export_payment_receipt_pdf(payment_id: UUID, db: DBSession, user: AdminUser):
-    payment = await db.get(Payment, payment_id)
+    stmt = (
+        select(Payment)
+        .options(selectinload(Payment.customer))
+        .where(Payment.id == payment_id)
+    )
+    payment = (await db.execute(stmt)).scalar_one_or_none()
     if not payment or payment.deleted_at is not None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Payment receipt record not found")
 

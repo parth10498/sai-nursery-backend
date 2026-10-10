@@ -1,14 +1,28 @@
+import uuid
+from datetime import date
 from decimal import Decimal
 from typing import List, Optional, Tuple
 from uuid import UUID
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
+from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.geo import City, Country, State
 from app.models.payment import Payment
 from app.models.sale import Sale
 from app.models.user import User, UserTypeEnum
-from app.schemas.customer import CustomerCreate, CustomerLedgerResponse, CustomerResponse, CustomerUpdate
+from app.schemas.customer import (
+    CustomerCreate,
+    CustomerLedgerResponse,
+    CustomerLedgerTransaction,
+    CustomerResponse,
+    CustomerSettleRequest,
+    CustomerSettleResponse,
+    CustomerStatementResponse,
+    CustomerUpdate,
+    PendingDueCustomer,
+    PendingDuesSummaryResponse,
+)
 
 
 class CustomerService:
@@ -259,6 +273,71 @@ class CustomerService:
         user.deleted_at = func.now()
         await self._db.commit()
 
+    async def _get_transactions(self, customer_id: UUID) -> List[CustomerLedgerTransaction]:
+        sales_stmt = (
+            select(Sale)
+            .options(selectinload(Sale.sugarcane))
+            .where(Sale.user_id == customer_id, Sale.deleted_at.is_(None))
+            .order_by(Sale.sale_date.asc(), Sale.created_at.asc())
+        )
+        sales = (await self._db.execute(sales_stmt)).scalars().all()
+
+        payments_stmt = (
+            select(Payment)
+            .where(Payment.user_id == customer_id, Payment.deleted_at.is_(None))
+            .order_by(Payment.payment_date.asc(), Payment.created_at.asc())
+        )
+        payments = (await self._db.execute(payments_stmt)).scalars().all()
+
+        entries = []
+        for s in sales:
+            v_name = s.sugarcane.name if s.sugarcane else "Sugarcane"
+            qty_label = f"{s.quantity:,.0f} Plants" if s.unit_type == "QTY" else f"{s.quantity:,.2f} Tons"
+            entries.append({
+                "id": s.id,
+                "date": s.sale_date,
+                "created_at": s.created_at,
+                "type": "SALE",
+                "reference_no": f"INV-{str(s.id)[:8].upper()}",
+                "description": f"{v_name} ({qty_label} @ ₹{s.rate:,.2f})",
+                "debit": s.total_amount,
+                "credit": Decimal("0.00"),
+            })
+
+        for p in payments:
+            mode_str = p.payment_mode.value.upper() if hasattr(p.payment_mode, "value") else str(p.payment_mode).upper()
+            note_suffix = f" - {p.notes}" if p.notes else ""
+            entries.append({
+                "id": p.id,
+                "date": p.payment_date,
+                "created_at": p.created_at,
+                "type": "PAYMENT",
+                "reference_no": p.receipt_no or f"REC-{str(p.id)[:8].upper()}",
+                "description": f"Payment received ({mode_str}){note_suffix}",
+                "debit": Decimal("0.00"),
+                "credit": p.amount_paid,
+            })
+
+        entries.sort(key=lambda x: (x["date"], x["created_at"]))
+
+        running = Decimal("0.00")
+        transactions: List[CustomerLedgerTransaction] = []
+        for e in entries:
+            running += (e["debit"] - e["credit"])
+            transactions.append(
+                CustomerLedgerTransaction(
+                    id=e["id"],
+                    transaction_date=e["date"],
+                    type=e["type"],
+                    reference_no=e["reference_no"],
+                    description=e["description"],
+                    debit=e["debit"],
+                    credit=e["credit"],
+                    running_balance=running,
+                )
+            )
+        return transactions
+
     async def get_ledger(self, customer_id: UUID) -> CustomerLedgerResponse:
         user = await self._db.get(User, customer_id)
         if not user or user.deleted_at is not None or user.type != UserTypeEnum.CUSTOMER:
@@ -273,6 +352,7 @@ class CustomerService:
         ) or 0
 
         sales_sum, paid_sum, bal = await self.get_customer_totals(customer_id)
+        transactions = await self._get_transactions(customer_id)
 
         return CustomerLedgerResponse(
             customer_id=user.id,
@@ -282,4 +362,162 @@ class CustomerService:
             balance=bal,
             sales_count=sales_count,
             payments_count=payments_count,
+            transactions=transactions,
         )
+
+    async def get_customer_statement(self, customer_id: UUID) -> CustomerStatementResponse:
+        user = await self._db.get(User, customer_id)
+        if not user or user.deleted_at is not None or user.type != UserTypeEnum.CUSTOMER:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Customer not found")
+
+        sales_sum, paid_sum, bal = await self.get_customer_totals(customer_id)
+        transactions = await self._get_transactions(customer_id)
+
+        sales_count = sum(1 for t in transactions if t.type == "SALE")
+        payments_count = sum(1 for t in transactions if t.type == "PAYMENT")
+        account_status = "SETTLED" if bal <= Decimal("0.00") else "PENDING"
+
+        return CustomerStatementResponse(
+            customer_id=user.id,
+            customer_name=user.name,
+            mobile=user.mobile,
+            address=user.address,
+            total_sales=sales_sum,
+            total_paid=paid_sum,
+            balance=bal,
+            status=account_status,
+            sales_count=sales_count,
+            payments_count=payments_count,
+            transactions=transactions,
+        )
+
+    async def settle_customer_dues(
+        self, customer_id: UUID, payload: CustomerSettleRequest
+    ) -> CustomerSettleResponse:
+        user = await self._db.get(User, customer_id)
+        if not user or user.deleted_at is not None or user.type != UserTypeEnum.CUSTOMER:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Customer not found")
+
+        sales_sum, paid_sum, current_balance = await self.get_customer_totals(customer_id)
+
+        if current_balance <= Decimal("0.00"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Customer '{user.name}' has no pending dues to settle (Current balance: ₹0.00).",
+            )
+
+        # Calculate exact settlement amount
+        amount_to_settle = (
+            current_balance
+            if (payload.settle_full or payload.amount is None)
+            else payload.amount
+        )
+
+        if amount_to_settle <= Decimal("0.00"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Settlement amount must be greater than zero.",
+            )
+
+        if amount_to_settle > current_balance:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Settlement amount (₹{amount_to_settle:,.2f}) cannot exceed current outstanding balance (₹{current_balance:,.2f}).",
+            )
+
+        settlement_date = payload.payment_date or date.today()
+        receipt_no = payload.receipt_no or f"SETTLE-{uuid.uuid4().hex[:8].upper()}"
+        default_notes = (
+            f"Full ledger settlement payment clearing ₹{amount_to_settle:,.2f}"
+            if amount_to_settle == current_balance
+            else f"Partial due settlement payment of ₹{amount_to_settle:,.2f}"
+        )
+        notes = payload.notes if payload.notes else default_notes
+
+        payment = Payment(
+            user_id=customer_id,
+            amount_paid=amount_to_settle,
+            payment_date=settlement_date,
+            payment_mode=payload.payment_mode,
+            receipt_no=receipt_no,
+            payment_proof_url=payload.payment_proof_url,
+            notes=notes,
+        )
+        self._db.add(payment)
+        await self._db.commit()
+        await self._db.refresh(payment)
+
+        remaining_balance = current_balance - amount_to_settle
+        is_fully_settled = remaining_balance <= Decimal("0.00")
+
+        return CustomerSettleResponse(
+            payment_id=payment.id,
+            customer_id=customer_id,
+            customer_name=user.name,
+            previous_balance=current_balance,
+            amount_settled=amount_to_settle,
+            remaining_balance=remaining_balance,
+            is_fully_settled=is_fully_settled,
+            payment_date=payment.payment_date,
+            payment_mode=payment.payment_mode,
+            receipt_no=payment.receipt_no,
+            notes=payment.notes,
+            created_at=payment.created_at,
+        )
+
+    async def get_pending_dues_summary(
+        self, search: Optional[str] = None, page: int = 1, size: int = 50
+    ) -> Tuple[PendingDuesSummaryResponse, int]:
+        stmt = (
+            select(User)
+            .where(User.type == UserTypeEnum.CUSTOMER, User.deleted_at.is_(None))
+            .order_by(User.name.asc())
+        )
+        if search:
+            search_pat = f"%{search.strip()}%"
+            stmt = stmt.where((User.name.ilike(search_pat)) | (User.mobile.ilike(search_pat)))
+
+        all_customers = (await self._db.execute(stmt)).scalars().all()
+
+        pending_items: List[PendingDueCustomer] = []
+        total_dues = Decimal("0.00")
+
+        for c in all_customers:
+            s_sum, p_sum, bal = await self.get_customer_totals(c.id)
+            if bal > Decimal("0.00"):
+                s_count = await self._db.scalar(
+                    select(func.count(Sale.id)).where(Sale.user_id == c.id, Sale.deleted_at.is_(None))
+                ) or 0
+                p_count = await self._db.scalar(
+                    select(func.count(Payment.id)).where(Payment.user_id == c.id, Payment.deleted_at.is_(None))
+                ) or 0
+
+                pending_items.append(
+                    PendingDueCustomer(
+                        customer_id=c.id,
+                        customer_name=c.name,
+                        mobile=c.mobile,
+                        total_sales=s_sum,
+                        total_paid=p_sum,
+                        balance=bal,
+                        sales_count=s_count,
+                        payments_count=p_count,
+                    )
+                )
+                total_dues += bal
+
+        # Sort by balance descending
+        pending_items.sort(key=lambda x: x.balance, reverse=True)
+
+        total_unsettled = len(pending_items)
+        start_idx = (page - 1) * size
+        end_idx = start_idx + size
+        paginated_items = pending_items[start_idx:end_idx]
+
+        summary = PendingDuesSummaryResponse(
+            total_pending_dues=total_dues,
+            total_unsettled_farmers=total_unsettled,
+            items=paginated_items,
+        )
+        return summary, total_unsettled
+

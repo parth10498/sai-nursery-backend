@@ -1,9 +1,10 @@
 import re
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
-from typing import Optional
+from typing import List, Optional
 from uuid import UUID
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from app.models.payment import PaymentModeEnum
 
 
 def _clean_str(v: Optional[str]) -> Optional[str]:
@@ -148,6 +149,17 @@ class CustomerResponse(CustomerBase):
     created_at: datetime
 
 
+class CustomerLedgerTransaction(BaseModel):
+    id: UUID
+    transaction_date: date
+    type: str  # "SALE" or "PAYMENT"
+    reference_no: Optional[str] = None
+    description: str
+    debit: Decimal = Decimal("0.00")
+    credit: Decimal = Decimal("0.00")
+    running_balance: Decimal = Decimal("0.00")
+
+
 class CustomerLedgerResponse(BaseModel):
     customer_id: UUID
     customer_name: str
@@ -156,3 +168,73 @@ class CustomerLedgerResponse(BaseModel):
     balance: Decimal
     sales_count: int
     payments_count: int
+    transactions: List[CustomerLedgerTransaction] = Field(default_factory=list)
+
+
+class CustomerStatementResponse(BaseModel):
+    customer_id: UUID
+    customer_name: str
+    mobile: Optional[str] = None
+    address: Optional[str] = None
+    total_sales: Decimal
+    total_paid: Decimal
+    balance: Decimal
+    status: str  # "SETTLED" or "PENDING"
+    sales_count: int
+    payments_count: int
+    transactions: List[CustomerLedgerTransaction] = Field(default_factory=list)
+
+
+class CustomerSettleRequest(BaseModel):
+    amount: Optional[Decimal] = Field(
+        None,
+        gt=0,
+        le=Decimal("100000000.00"),
+        description="Amount to settle. If omitted or settle_full=True, settles exact outstanding balance",
+    )
+    settle_full: bool = Field(False, description="Whether to settle the full remaining outstanding balance")
+    payment_mode: PaymentModeEnum = Field(default=PaymentModeEnum.CASH, description="Payment mode")
+    payment_date: Optional[date] = Field(None, description="Settlement payment date (defaults to today)")
+    receipt_no: Optional[str] = Field(None, max_length=50, description="Receipt or transaction reference number")
+    payment_proof_url: Optional[str] = Field(None, max_length=500, description="URL or attachment proof")
+    notes: Optional[str] = Field(None, max_length=500, description="Settlement remarks or waiver notes")
+
+    @field_validator("payment_date")
+    @classmethod
+    def validate_payment_date(cls, v: Optional[date]) -> Optional[date]:
+        if v is not None and v > date.today():
+            raise ValueError("Settlement payment date cannot be in the future")
+        return v
+
+
+class CustomerSettleResponse(BaseModel):
+    payment_id: UUID
+    customer_id: UUID
+    customer_name: str
+    previous_balance: Decimal
+    amount_settled: Decimal
+    remaining_balance: Decimal
+    is_fully_settled: bool
+    payment_date: date
+    payment_mode: PaymentModeEnum
+    receipt_no: Optional[str] = None
+    notes: Optional[str] = None
+    created_at: datetime
+
+
+class PendingDueCustomer(BaseModel):
+    customer_id: UUID
+    customer_name: str
+    mobile: Optional[str] = None
+    total_sales: Decimal
+    total_paid: Decimal
+    balance: Decimal
+    sales_count: int
+    payments_count: int
+
+
+class PendingDuesSummaryResponse(BaseModel):
+    total_pending_dues: Decimal
+    total_unsettled_farmers: int
+    items: List[PendingDueCustomer] = Field(default_factory=list)
+

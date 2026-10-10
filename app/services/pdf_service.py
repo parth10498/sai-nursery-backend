@@ -174,3 +174,79 @@ class PDFGenerator:
         doc.build(elements)
         buffer.seek(0)
         return buffer.getvalue()
+
+    @classmethod
+    def generate_customer_statement_pdf(cls, statement_data: dict) -> bytes:
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=25, leftMargin=25, topMargin=25, bottomMargin=25)
+        elements = cls._create_header("CUSTOMER ACCOUNT STATEMENT & DUE SETTLEMENT REPORT")
+
+        status_str = statement_data.get("status", "PENDING")
+        status_color = "#0F5132" if status_str == "SETTLED" else "#B02A37"
+
+        info_data = [
+            [
+                f"Customer Name: {statement_data.get('customer_name', '-')}",
+                f"Account Status: {status_str}",
+            ],
+            [
+                f"Mobile: {statement_data.get('mobile', '-')}",
+                f"Total Purchases: Rs. {statement_data.get('total_sales', 0):,.2f}",
+            ],
+            [
+                f"Address: {statement_data.get('address', '-')}",
+                f"Total Payments Received: Rs. {statement_data.get('total_paid', 0):,.2f}",
+            ],
+            [
+                "",
+                f"Current Balance Due: Rs. {statement_data.get('balance', 0):,.2f}",
+            ],
+        ]
+        info_table = Table(info_data, colWidths=[300, 260])
+        info_table.setStyle(TableStyle([
+            ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
+            ('FONTSIZE', (0, 0), (-1, -1), 9),
+            ('FONTNAME', (1, 0), (1, 0), 'Helvetica-Bold'),
+            ('FONTNAME', (1, 3), (1, 3), 'Helvetica-Bold'),
+            ('TEXTCOLOR', (1, 0), (1, 0), colors.HexColor(status_color)),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+        ]))
+        elements.append(info_table)
+        elements.append(Spacer(1, 10))
+
+        headers = ["Date", "Type", "Ref / Receipt", "Description", "Debit (Rs.)", "Credit (Rs.)", "Balance (Rs.)"]
+        table_data = [headers]
+        transactions = statement_data.get("transactions", [])
+        for t in transactions:
+            debit_val = f"{t.get('debit', 0):,.2f}" if t.get('debit') else "-"
+            credit_val = f"{t.get('credit', 0):,.2f}" if t.get('credit') else "-"
+            bal_val = f"{t.get('running_balance', 0):,.2f}"
+            table_data.append([
+                str(t.get("transaction_date", "")),
+                t.get("type", ""),
+                t.get("reference_no", "-"),
+                t.get("description", ""),
+                debit_val,
+                credit_val,
+                bal_val,
+            ])
+
+        if not transactions:
+            table_data.append(["-", "-", "-", "No transactions recorded", "-", "-", "-"])
+
+        t_table = Table(table_data, colWidths=[65, 50, 75, 170, 65, 65, 70])
+        t_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#0F5132')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 8),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#E5E7EB')),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F8FAF9')]),
+            ('ALIGN', (4, 1), (-1, -1), 'RIGHT'),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ]))
+        elements.append(t_table)
+        doc.build(elements)
+        buffer.seek(0)
+        return buffer.getvalue()
+

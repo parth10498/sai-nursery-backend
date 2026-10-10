@@ -26,6 +26,19 @@ async def export_customers_pdf(db: DBSession, user: AdminUser, search: Optional[
     )
 
 
+@router.get("/customers/{customer_id}/statement/pdf")
+async def export_customer_statement_pdf(customer_id: UUID, db: DBSession, user: AdminUser):
+    service = CustomerService(db)
+    statement = await service.get_customer_statement(customer_id)
+    statement_dict = statement.model_dump()
+    pdf_bytes = PDFGenerator.generate_customer_statement_pdf(statement_dict)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename=statement_{customer_id}.pdf"},
+    )
+
+
 @router.get("/sales/{sale_id}/pdf")
 async def export_sale_invoice_pdf(sale_id: UUID, db: DBSession, user: AdminUser):
     stmt = (

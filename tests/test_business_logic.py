@@ -2,7 +2,7 @@ from datetime import date, timedelta
 from decimal import Decimal
 import pytest
 from app.schemas.auth import LoginRequest
-from app.schemas.customer import CustomerCreate
+from app.schemas.customer import CustomerCreate, CustomerSettleRequest, CustomerStatementResponse
 from app.schemas.payment import PaymentCreate, PaymentModeEnum
 from app.schemas.sale import SaleCreate
 from app.schemas.sugar_cane import SugarCaneCreate
@@ -204,3 +204,25 @@ def test_login_request_validation():
 
     with pytest.raises(ValueError):
         LoginRequest(username="admin", password="12")
+
+
+# ------------------ Settlement Validations ------------------
+
+def test_customer_settle_full_request():
+    req = CustomerSettleRequest(settle_full=True, payment_mode=PaymentModeEnum.ONLINE, notes="Cleared on harvest")
+    assert req.settle_full is True
+    assert req.amount is None
+    assert req.payment_mode == PaymentModeEnum.ONLINE
+
+
+def test_customer_settle_partial_amount_request():
+    req = CustomerSettleRequest(amount=Decimal("15000.00"), payment_mode=PaymentModeEnum.CASH)
+    assert req.amount == Decimal("15000.00")
+    assert req.settle_full is False
+
+
+def test_customer_settle_future_date_invalid():
+    future = date.today() + timedelta(days=2)
+    with pytest.raises(ValueError, match="future"):
+        CustomerSettleRequest(amount=Decimal("5000.00"), payment_date=future)
+

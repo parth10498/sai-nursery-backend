@@ -8,7 +8,11 @@ from app.schemas.customer import (
     CustomerCreate,
     CustomerLedgerResponse,
     CustomerResponse,
+    CustomerSettleRequest,
+    CustomerSettleResponse,
+    CustomerStatementResponse,
     CustomerUpdate,
+    PendingDuesSummaryResponse,
 )
 from app.services.customer_service import CustomerService
 
@@ -35,6 +39,19 @@ async def list_customers(
             total_pages=total_pages,
         )
     )
+
+
+@router.get("/dues/pending", response_model=ApiResponse[PendingDuesSummaryResponse])
+async def get_pending_dues(
+    db: DBSession,
+    user: AdminUser,
+    search: Optional[str] = None,
+    page: int = Query(1, ge=1),
+    size: int = Query(50, ge=1, le=200),
+):
+    service = CustomerService(db)
+    summary, _ = await service.get_pending_dues_summary(search=search, page=page, size=size)
+    return ApiResponse(data=summary)
 
 
 @router.post("", response_model=ApiResponse[CustomerResponse], status_code=status.HTTP_201_CREATED)
@@ -72,3 +89,26 @@ async def get_customer_ledger(customer_id: UUID, db: DBSession, user: AdminUser)
     service = CustomerService(db)
     ledger = await service.get_ledger(customer_id)
     return ApiResponse(data=ledger)
+
+
+@router.get("/{customer_id}/statement", response_model=ApiResponse[CustomerStatementResponse])
+async def get_customer_statement(customer_id: UUID, db: DBSession, user: AdminUser):
+    service = CustomerService(db)
+    statement = await service.get_customer_statement(customer_id)
+    return ApiResponse(data=statement)
+
+
+@router.post("/{customer_id}/settle", response_model=ApiResponse[CustomerSettleResponse], status_code=status.HTTP_201_CREATED)
+async def settle_customer_dues(
+    customer_id: UUID,
+    payload: CustomerSettleRequest,
+    db: DBSession,
+    user: AdminUser,
+):
+    service = CustomerService(db)
+    settlement = await service.settle_customer_dues(customer_id, payload)
+    return ApiResponse(
+        data=settlement,
+        message="Dues settled successfully" if settlement.is_fully_settled else "Partial settlement recorded successfully",
+    )
+

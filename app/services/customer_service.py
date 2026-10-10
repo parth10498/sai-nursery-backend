@@ -4,6 +4,7 @@ from uuid import UUID
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.models.geo import City, Country, State
 from app.models.payment import Payment
 from app.models.sale import Sale
 from app.models.user import User, UserTypeEnum
@@ -48,7 +49,7 @@ class CustomerService:
         )
 
         if search:
-            search_pattern = f"%{search}%"
+            search_pattern = f"%{search.strip()}%"
             stmt = stmt.where(
                 (User.name.ilike(search_pattern))
                 | (User.mobile.ilike(search_pattern))
@@ -87,7 +88,56 @@ class CustomerService:
 
         return responses, total
 
+    async def _validate_location(
+        self, country_id: Optional[int], state_id: Optional[int], city_id: Optional[int]
+    ) -> None:
+        if country_id:
+            c = await self._db.get(Country, country_id)
+            if not c:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Country with ID {country_id} does not exist")
+        if state_id:
+            s = await self._db.get(State, state_id)
+            if not s:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"State with ID {state_id} does not exist")
+        if city_id:
+            ct = await self._db.get(City, city_id)
+            if not ct:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"City/Taluka with ID {city_id} does not exist")
+
     async def create_customer(self, payload: CustomerCreate) -> CustomerResponse:
+        # Check duplicate mobile
+        if payload.mobile:
+            existing_mobile = await self._db.scalar(
+                select(User).where(
+                    User.mobile == payload.mobile,
+                    User.type == UserTypeEnum.CUSTOMER,
+                    User.deleted_at.is_(None),
+                )
+            )
+            if existing_mobile:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Customer with mobile number '{payload.mobile}' already exists ({existing_mobile.name})",
+                )
+
+        # Check duplicate email
+        if payload.email:
+            existing_email = await self._db.scalar(
+                select(User).where(
+                    User.email == payload.email,
+                    User.type == UserTypeEnum.CUSTOMER,
+                    User.deleted_at.is_(None),
+                )
+            )
+            if existing_email:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Customer with email '{payload.email}' already exists ({existing_email.name})",
+                )
+
+        # Validate locations if provided
+        await self._validate_location(payload.country_id, payload.state_id, payload.city_id)
+
         user = User(
             name=payload.name,
             email=payload.email,
@@ -126,7 +176,7 @@ class CustomerService:
     async def get_customer(self, customer_id: UUID) -> CustomerResponse:
         user = await self._db.get(User, customer_id)
         if not user or user.deleted_at is not None or user.type != UserTypeEnum.CUSTOMER:
-            raise HTTPException(status_code=404, detail="Customer not found")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Customer not found")
 
         sales_sum, paid_sum, bal = await self.get_customer_totals(user.id)
         return CustomerResponse(
@@ -151,9 +201,50 @@ class CustomerService:
     async def update_customer(self, customer_id: UUID, payload: CustomerUpdate) -> CustomerResponse:
         user = await self._db.get(User, customer_id)
         if not user or user.deleted_at is not None or user.type != UserTypeEnum.CUSTOMER:
-            raise HTTPException(status_code=404, detail="Customer not found")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Customer not found")
 
-        for key, value in payload.model_dump(exclude_unset=True).items():
+        update_data = payload.model_dump(exclude_unset=True)
+
+        # Check duplicate mobile excluding self
+        if "mobile" in update_data and update_data["mobile"]:
+            existing_mobile = await self._db.scalar(
+                select(User).where(
+                    User.mobile == update_data["mobile"],
+                    User.id != customer_id,
+                    User.type == UserTypeEnum.CUSTOMER,
+                    User.deleted_at.is_(None),
+                )
+            )
+            if existing_mobile:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Another customer with mobile number '{update_data['mobile']}' already exists ({existing_mobile.name})",
+                )
+
+        # Check duplicate email excluding self
+        if "email" in update_data and update_data["email"]:
+            existing_email = await self._db.scalar(
+                select(User).where(
+                    User.email == update_data["email"],
+                    User.id != customer_id,
+                    User.type == UserTypeEnum.CUSTOMER,
+                    User.deleted_at.is_(None),
+                )
+            )
+            if existing_email:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Another customer with email '{update_data['email']}' already exists ({existing_email.name})",
+                )
+
+        # Validate location if updated
+        await self._validate_location(
+            update_data.get("country_id"),
+            update_data.get("state_id"),
+            update_data.get("city_id"),
+        )
+
+        for key, value in update_data.items():
             setattr(user, key, value)
 
         await self._db.commit()
@@ -163,7 +254,7 @@ class CustomerService:
     async def delete_customer(self, customer_id: UUID) -> None:
         user = await self._db.get(User, customer_id)
         if not user or user.deleted_at is not None or user.type != UserTypeEnum.CUSTOMER:
-            raise HTTPException(status_code=404, detail="Customer not found")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Customer not found")
 
         user.deleted_at = func.now()
         await self._db.commit()
@@ -171,7 +262,7 @@ class CustomerService:
     async def get_ledger(self, customer_id: UUID) -> CustomerLedgerResponse:
         user = await self._db.get(User, customer_id)
         if not user or user.deleted_at is not None or user.type != UserTypeEnum.CUSTOMER:
-            raise HTTPException(status_code=404, detail="Customer not found")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Customer not found")
 
         sales_count = await self._db.scalar(
             select(func.count(Sale.id)).where(Sale.user_id == customer_id, Sale.deleted_at.is_(None))

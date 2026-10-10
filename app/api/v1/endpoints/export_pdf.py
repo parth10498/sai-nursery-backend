@@ -1,11 +1,11 @@
 from typing import Optional
 from uuid import UUID
-from fastapi import APIRouter, Response, status
+from fastapi import APIRouter, HTTPException, Response, status
 from app.api.deps import AdminUser, DBSession
+from app.models.payment import Payment
+from app.models.sale import Sale
 from app.services.customer_service import CustomerService
-from app.services.payment_service import PaymentService
 from app.services.pdf_service import PDFGenerator
-from app.services.sale_service import SaleService
 from app.services.sugarcane_service import SugarCaneService
 
 router = APIRouter(prefix="/export", tags=["PDF Exports"])
@@ -26,12 +26,20 @@ async def export_customers_pdf(db: DBSession, user: AdminUser, search: Optional[
 
 @router.get("/sales/{sale_id}/pdf")
 async def export_sale_invoice_pdf(sale_id: UUID, db: DBSession, user: AdminUser):
-    service = SaleService(db)
-    sales, _ = await service.list_sales(page=1, size=1)
-    # Search for target sale or generate formatted invoice
-    sale = await db.get(SaleService(db)._db.get(sale_id) if hasattr(SaleService(db), '_db') else None)
-    # Fallback to mock dictionary for immediate verification if not yet created in DB
-    sale_dict = {"id": str(sale_id), "quantity": 1000, "rate": 2.5, "total_amount": 2500, "sale_date": "2026-10-10"}
+    sale = await db.get(Sale, sale_id)
+    if not sale or sale.deleted_at is not None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Sale invoice record not found")
+
+    sale_dict = {
+        "id": str(sale.id),
+        "customer_name": sale.customer.name if sale.customer else "Valued Farmer",
+        "sugarcane_name": sale.sugarcane.name if sale.sugarcane else "Sugarcane Seedlings",
+        "unit_type": sale.unit_type,
+        "quantity": float(sale.quantity),
+        "rate": float(sale.rate),
+        "total_amount": float(sale.total_amount),
+        "sale_date": str(sale.sale_date),
+    }
     pdf_bytes = PDFGenerator.generate_sale_invoice_pdf(sale_dict)
     return Response(
         content=pdf_bytes,
@@ -42,13 +50,17 @@ async def export_sale_invoice_pdf(sale_id: UUID, db: DBSession, user: AdminUser)
 
 @router.get("/payments/{payment_id}/pdf")
 async def export_payment_receipt_pdf(payment_id: UUID, db: DBSession, user: AdminUser):
+    payment = await db.get(Payment, payment_id)
+    if not payment or payment.deleted_at is not None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Payment receipt record not found")
+
     payment_dict = {
-        "id": str(payment_id),
-        "customer_name": "Ramesh Baburao Patil",
-        "payment_date": "2026-10-10",
-        "payment_mode": "Online / UPI",
-        "receipt_no": "UPI-984210",
-        "amount_paid": 5000.0,
+        "id": str(payment.id),
+        "customer_name": payment.customer.name if payment.customer else "-",
+        "payment_date": str(payment.payment_date),
+        "payment_mode": payment.payment_mode.value if hasattr(payment.payment_mode, "value") else str(payment.payment_mode),
+        "receipt_no": payment.receipt_no or "-",
+        "amount_paid": float(payment.amount_paid),
     }
     pdf_bytes = PDFGenerator.generate_payment_receipt_pdf(payment_dict)
     return Response(

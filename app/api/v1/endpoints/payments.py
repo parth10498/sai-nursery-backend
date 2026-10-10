@@ -4,7 +4,7 @@ from uuid import UUID
 from fastapi import APIRouter, Query, status
 from app.api.deps import AdminUser, CurrentUser, DBSession
 from app.schemas.base import ApiResponse, PaginatedResponse
-from app.schemas.payment import PaymentCreate, PaymentResponse
+from app.schemas.payment import PaymentCreate, PaymentResponse, PaymentUpdate
 from app.services.payment_service import PaymentService
 
 router = APIRouter(prefix="/payments", tags=["Payments"])
@@ -15,8 +15,8 @@ async def list_payments(
     db: DBSession,
     user: CurrentUser,
     customer_id: Optional[UUID] = None,
-    page: int = Query(1, ge=1),
-    size: int = Query(20, ge=1, le=100),
+    page: int = Query(1, ge=1, description="Page number"),
+    size: int = Query(20, ge=1, le=100, description="Items per page"),
 ):
     service = PaymentService(db)
     payments, total = await service.list_payments(customer_id=customer_id, page=page, size=size)
@@ -37,6 +37,20 @@ async def create_payment(payload: PaymentCreate, db: DBSession, user: AdminUser)
     service = PaymentService(db)
     payment = await service.create_payment(payload)
     return ApiResponse(data=payment, message="Payment recorded successfully")
+
+
+@router.get("/{payment_id}", response_model=ApiResponse[PaymentResponse])
+async def get_payment(payment_id: UUID, db: DBSession, user: CurrentUser):
+    service = PaymentService(db)
+    payment = await service.get_payment(payment_id)
+    return ApiResponse(data=payment)
+
+
+@router.put("/{payment_id}", response_model=ApiResponse[PaymentResponse])
+async def update_payment(payment_id: UUID, payload: PaymentUpdate, db: DBSession, user: AdminUser):
+    service = PaymentService(db)
+    payment = await service.update_payment(payment_id, payload)
+    return ApiResponse(data=payment, message="Payment updated successfully")
 
 
 @router.delete("/{payment_id}", status_code=status.HTTP_204_NO_CONTENT)

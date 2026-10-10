@@ -13,11 +13,18 @@ router = APIRouter(prefix="/sugarcane", tags=["Sugarcane Varieties"])
 async def list_varieties(
     db: DBSession,
     user: CurrentUser,
-    active_only: bool = Query(False),
+    active_only: bool = Query(False, description="Filter only active varieties"),
 ):
     service = SugarCaneService(db)
     varieties = await service.list_varieties(active_only=active_only)
     return ApiResponse(data=varieties)
+
+
+@router.get("/{variety_id}", response_model=ApiResponse[SugarCaneResponse])
+async def get_variety(variety_id: UUID, db: DBSession, user: CurrentUser):
+    service = SugarCaneService(db)
+    variety = await service.get_variety(variety_id)
+    return ApiResponse(data=variety)
 
 
 @router.post("", response_model=ApiResponse[SugarCaneResponse], status_code=status.HTTP_201_CREATED)

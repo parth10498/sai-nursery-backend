@@ -11,10 +11,11 @@ class AuthService:
         self._db = db
 
     async def authenticate(self, payload: LoginRequest) -> TokenResponse:
+        username_clean = payload.username.strip()
         stmt = (
             select(User)
             .where(
-                (User.email == payload.username) | (User.mobile == payload.username),
+                (User.email.ilike(username_clean)) | (User.mobile == username_clean),
                 User.deleted_at.is_(None),
             )
         )
@@ -24,19 +25,19 @@ class AuthService:
         if not user or not user.password:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Incorrect username or password",
+                detail="Incorrect username/mobile number or password",
             )
 
         if not verify_password(payload.password, user.password):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Incorrect username or password",
+                detail="Incorrect username/mobile number or password",
             )
 
         if not user.is_active:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Account is inactive. Contact administrator.",
+                detail="Your account is currently inactive. Please contact the administrator.",
             )
 
         token = create_access_token(

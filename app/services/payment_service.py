@@ -1,11 +1,11 @@
 from typing import List, Optional, Tuple
 from uuid import UUID
-from fastapi import HTTPException
+from fastapi import HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.payment import Payment
 from app.models.user import User, UserTypeEnum
-from app.schemas.payment import PaymentCreate, PaymentResponse
+from app.schemas.payment import PaymentCreate, PaymentResponse, PaymentUpdate
 
 
 class PaymentService:
@@ -48,10 +48,28 @@ class PaymentService:
 
         return responses, total
 
+    async def get_payment(self, payment_id: UUID) -> PaymentResponse:
+        payment = await self._db.get(Payment, payment_id)
+        if not payment or payment.deleted_at is not None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Payment record not found")
+
+        return PaymentResponse(
+            id=payment.id,
+            user_id=payment.user_id,
+            customer_name=payment.customer.name if payment.customer else None,
+            amount_paid=payment.amount_paid,
+            payment_date=payment.payment_date,
+            payment_mode=payment.payment_mode,
+            receipt_no=payment.receipt_no,
+            payment_proof_url=payment.payment_proof_url,
+            notes=payment.notes,
+            created_at=payment.created_at,
+        )
+
     async def create_payment(self, payload: PaymentCreate) -> PaymentResponse:
         customer = await self._db.get(User, payload.user_id)
         if not customer or customer.deleted_at is not None or customer.type != UserTypeEnum.CUSTOMER:
-            raise HTTPException(status_code=404, detail="Customer not found")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Customer not found")
 
         payment = Payment(
             user_id=payload.user_id,
@@ -79,10 +97,23 @@ class PaymentService:
             created_at=payment.created_at,
         )
 
+    async def update_payment(self, payment_id: UUID, payload: PaymentUpdate) -> PaymentResponse:
+        payment = await self._db.get(Payment, payment_id)
+        if not payment or payment.deleted_at is not None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Payment record not found")
+
+        update_data = payload.model_dump(exclude_unset=True)
+        for key, value in update_data.items():
+            setattr(payment, key, value)
+
+        await self._db.commit()
+        await self._db.refresh(payment)
+        return await self.get_payment(payment_id)
+
     async def delete_payment(self, payment_id: UUID) -> None:
         payment = await self._db.get(Payment, payment_id)
         if not payment or payment.deleted_at is not None:
-            raise HTTPException(status_code=404, detail="Payment not found")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Payment record not found")
 
         payment.deleted_at = func.now()
         await self._db.commit()

@@ -1,5 +1,5 @@
 from typing import List
-from fastapi import APIRouter
+from fastapi import APIRouter, Path
 from app.api.deps import DBSession
 from app.schemas.base import ApiResponse
 from app.schemas.geo import CityResponse, CountryResponse, StateResponse
@@ -17,7 +17,10 @@ async def get_countries(db: DBSession):
 
 
 @router.get("/states/{country_id}", response_model=ApiResponse[List[StateResponse]])
-async def get_states(country_id: int, db: DBSession):
+async def get_states(
+    country_id: int = Path(..., gt=0, description="Positive integer Country ID"),
+    db: DBSession = None,
+):
     service = GeoService(db)
     states = await service.get_states(country_id)
     data = [StateResponse.model_validate(s) for s in states]
@@ -25,7 +28,10 @@ async def get_states(country_id: int, db: DBSession):
 
 
 @router.get("/cities/{state_id}", response_model=ApiResponse[List[CityResponse]])
-async def get_cities(state_id: int, db: DBSession):
+async def get_cities(
+    state_id: int = Path(..., gt=0, description="Positive integer State ID"),
+    db: DBSession = None,
+):
     service = GeoService(db)
     cities = await service.get_cities(state_id)
     data = [CityResponse.model_validate(c) for c in cities]

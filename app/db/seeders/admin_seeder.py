@@ -1,10 +1,8 @@
 import asyncio
-from passlib.context import CryptContext
 from sqlalchemy import select
+from app.core.security import get_password_hash
 from app.db.session import AsyncSessionFactory
 from app.models.user import User, UserTypeEnum
-
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 async def seed_admin():
@@ -14,13 +12,17 @@ async def seed_admin():
         )
         existing = result.scalar_one_or_none()
         if existing:
-            print("Admin user already exists.")
+            # Ensure password is refreshed with valid bcrypt hash
+            existing.password = get_password_hash("Admin@123")
+            existing.is_active = True
+            await session.commit()
+            print("Admin user updated with fresh password!")
             return
 
         admin = User(
             name="Sai Nursery Admin",
             email="nurserysai@yopmail.com",
-            password=pwd_context.hash("Admin@123"),
+            password=get_password_hash("Admin@123"),
             type=UserTypeEnum.ADMIN,
             mobile="9876543210",
             is_active=True,

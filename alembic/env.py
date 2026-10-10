@@ -30,7 +30,8 @@ settings = get_settings()
 # add your model's MetaData object here
 # for 'autogenerate' support
 target_metadata = Base.metadata
-config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
+# configparser requires % to be escaped as %%
+config.set_main_option("sqlalchemy.url", settings.DATABASE_URL.replace("%", "%%"))
 
 # other values from the config, defined by the needs of env.py,
 # can be acquired:
